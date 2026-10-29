@@ -10,8 +10,8 @@ use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
 /// The preview pane, and the paper inside it (12 pt inset on each side).
-const PREVIEW_W: f32 = 320.0;
-const PREVIEW_H: f32 = 380.0;
+const PREVIEW_W: f32 = 360.0;
+const PREVIEW_H: f32 = 420.0;
 const PREVIEW_INSET: f32 = 12.0;
 pub(crate) const PREVIEW_BOX: (f32, f32) = (PREVIEW_W - 2.0 * PREVIEW_INSET, PREVIEW_H - 2.0 * PREVIEW_INSET);
 /// Label printing reads the printed area of at most this many pages (each is a quick render on
@@ -101,6 +101,9 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    pub presets: std::collections::BTreeMap<String, serde_json::Value>,
+    pub preset_name: String,
+    pub preset_error: Option<String>,
 }
 
 impl Default for PrintDraft {
@@ -136,7 +139,7 @@ impl Default for PrintDraft {
             content: Content::DocumentAndMarkups,
             as_image: false,
             dpi: 300.0,
-            paper: 0,
+            paper: PAPERS.iter().position(|(name, _)| *name == "A4").unwrap_or(0),
             paper_before_label: None,
             sheet: 0,
             current_page: 0,
@@ -149,16 +152,143 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            presets: Default::default(),
+            preset_name: String::new(),
+            preset_error: None,
         }
     }
 }
 
 impl PrintDraft {
+    pub(crate) fn layout_preferences(&self) -> serde_json::Value {
+        serde_json::json!({
+            "per_sheet": if self.handling == Handling::Multiple { self.per_sheet } else { 1 },
+            "orientation": match self.orientation { Orientation::Auto => "auto", Orientation::Portrait => "portrait", Orientation::Landscape => "landscape" },
+            "order": match self.order {
+                PageOrder::Horizontal => "horizontal", PageOrder::HorizontalReversed => "horizontal-reversed",
+                PageOrder::Vertical => "vertical", PageOrder::VerticalReversed => "vertical-reversed", PageOrder::CutStack => "horizontal",
+            },
+            "border": self.border,
+            "auto_rotate": self.auto_rotate,
+            "paper": PAPERS.get(self.paper).map(|(name, _)| *name),
+            "grayscale": self.grayscale,
+            "collate": self.collate,
+            "duplex": match self.duplex { None => "printer", Some(spool::Duplex::Off) => "off", Some(spool::Duplex::LongEdge) => "long-edge", Some(spool::Duplex::ShortEdge) => "short-edge" },
+            "size": match self.size { SizeMode::Fit => "fit", SizeMode::Actual => "actual", SizeMode::Shrink => "shrink", SizeMode::Custom(_) => "custom" },
+            "scale": self.custom_scale,
+            "content": match self.content { Content::Document => "document", Content::DocumentAndMarkups => "markups", Content::DocumentAndStamps => "stamps", Content::FormFieldsOnly => "forms" },
+        })
+    }
+
+    pub(crate) fn restore_layout_preferences(&mut self, value: &serde_json::Value) {
+        if let Some(paper) = value["paper"].as_str().and_then(|name| PAPERS.iter().position(|(p, _)| *p == name)) {
+            self.paper = paper;
+        }
+        for (field, target) in [("grayscale", &mut self.grayscale), ("collate", &mut self.collate)] {
+            if let Some(on) = value[field].as_bool() {
+                *target = on;
+            }
+        }
+        self.duplex = match value["duplex"].as_str() {
+            Some("printer") => None,
+            Some("off") => Some(spool::Duplex::Off),
+            Some("long-edge") => Some(spool::Duplex::LongEdge),
+            Some("short-edge") => Some(spool::Duplex::ShortEdge),
+            _ => self.duplex,
+        };
+        if let Some(scale) = value["scale"].as_f64().filter(|s| s.is_finite() && (1.0..=1000.0).contains(s)) {
+            self.custom_scale = scale;
+        }
+        self.size = match value["size"].as_str() {
+            Some("fit") => SizeMode::Fit,
+            Some("actual") => SizeMode::Actual,
+            Some("shrink") => SizeMode::Shrink,
+            Some("custom") => SizeMode::Custom(self.custom_scale),
+            _ => self.size,
+        };
+        self.content = match value["content"].as_str() {
+            Some("document") => Content::Document,
+            Some("markups") => Content::DocumentAndMarkups,
+            Some("stamps") => Content::DocumentAndStamps,
+            Some("forms") => Content::FormFieldsOnly,
+            _ => self.content,
+        };
+        if let Some(count) = value["per_sheet"].as_u64().and_then(|n| usize::try_from(n).ok()) {
+            self.set_pages_per_sheet(count);
+        }
+        self.orientation = match value["orientation"].as_str() {
+            Some("portrait") => Orientation::Portrait,
+            Some("landscape") => Orientation::Landscape,
+            Some("auto") => Orientation::Auto,
+            _ => self.orientation,
+        };
+        self.order = match value["order"].as_str() {
+            Some("horizontal-reversed") => PageOrder::HorizontalReversed,
+            Some("vertical") => PageOrder::Vertical,
+            Some("vertical-reversed") => PageOrder::VerticalReversed,
+            Some("horizontal") => PageOrder::Horizontal,
+            _ => self.order,
+        };
+        if let Some(on) = value["border"].as_bool() {
+            self.border = on;
+        }
+        if let Some(on) = value["auto_rotate"].as_bool() {
+            self.auto_rotate = on;
+        }
+        self.sheet = 0;
+    }
+
+    pub fn save_preset(&mut self, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 64 {
+            return Err("Use a preset name of 1 to 64 characters.".into());
+        }
+        if self.presets.len() >= 20 && !self.presets.contains_key(name) {
+            return Err("There are already 20 presets. Replace an existing preset.".into());
+        }
+        if !matches!(self.handling, Handling::Size | Handling::Multiple) || self.cut_and_stack() {
+            return Err("Presets support ordinary page sizing and pages per sheet. Choose Size or Multiple first.".into());
+        }
+        self.presets.insert(name.to_string(), self.layout_preferences());
+        Ok(())
+    }
+
+    pub fn apply_preset(&mut self, name: &str) -> Result<(), String> {
+        let value = self.presets.get(name).cloned().ok_or("No print preset has that name.")?;
+        self.restore_layout_preferences(&value);
+        Ok(())
+    }
+
+    pub(crate) fn restore_presets(&mut self, value: &serde_json::Value) {
+        let Some(values) = value.as_object() else { return };
+        self.presets.clear();
+        for (name, value) in values.iter().take(20) {
+            if name.trim().is_empty() || name.chars().count() > 64 || !value.is_object() {
+                continue;
+            }
+            let mut draft = Self::default();
+            draft.restore_layout_preferences(value);
+            self.presets.insert(name.clone(), draft.layout_preferences());
+        }
+    }
+
+    /// Shared by the primary layout control and its quick preset.
+    pub fn set_pages_per_sheet(&mut self, count: usize) {
+        if !matches!(count, 1 | 2 | 4 | 6 | 9 | 16) {
+            return;
+        }
+        self.per_sheet = count;
+        self.set_handling(if count == 1 { Handling::Size } else { Handling::Multiple });
+    }
+
     /// Choose Page Sizing & Handling. Label loads label stock and remembers the paper it
     /// replaced; leaving Label gives that paper back, unless another one was picked meanwhile.
     pub fn set_handling(&mut self, handling: Handling) {
         let leaving_label = self.handling == Handling::Label && handling != Handling::Label;
         self.handling = handling;
+        if handling == Handling::Multiple && self.per_sheet < 2 {
+            self.per_sheet = 2;
+        }
         self.sheet = 0;
         if handling == Handling::Label {
             // A label goes on label stock.
@@ -928,17 +1058,155 @@ pub(crate) fn body(
     labels: &[String],
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
-    ui.set_width(820.0);
+    ui.set_width(860.0);
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
     ui.label(egui::RichText::new(tl!("Print")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    let settings = d.settings(sizes.len(), labels);
-    let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
+    let mut settings = d.settings(sizes.len(), labels);
+    let sheets = match settings.as_ref().map_err(Clone::clone).and_then(|s| print::layout(sizes, s).map_err(|e| e.to_string())) {
+        Ok(sheets) => sheets,
+        Err(error) => {
+            settings = Err(error);
+            Vec::new()
+        }
+    };
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
     ui.horizontal_top(|ui| {
-        // Settings.
+        // Preview.
         ui.vertical(|ui| {
-            ui.set_width(470.0);
-            egui::Grid::new("print-top").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+            ui.set_width(PREVIEW_W);
+            let (area, _) = ui.allocate_exact_size(vec2(PREVIEW_W, PREVIEW_H), egui::Sense::hover());
+            ui.painter().rect_filled(area, 6.0, t.hover);
+            match (&settings, sheets.get(d.sheet)) {
+                (Err(e), _) => {
+                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(tl!(e)).color(t.text_muted)).wrap());
+                }
+                (Ok(_), Some(sheet)) => {
+                    let k = (PREVIEW_BOX.0 / sheet.size.0 as f32).min(PREVIEW_BOX.1 / sheet.size.1 as f32);
+                    let paper = Rect::from_center_size(area.center(), vec2(sheet.size.0 as f32 * k, sheet.size.1 as f32 * k));
+                    ui.painter().rect_filled(paper, 0.0, Color32::WHITE);
+                    ui.painter().rect_stroke(paper, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+                    let to_screen = |x: f64, y: f64| -> Pos2 { pos2(paper.left() + x as f32 * k, paper.bottom() - y as f32 * k) };
+                    let painter = ui.painter().with_clip_rect(paper);
+                    for pl in &sheet.placed {
+                        let (dw, dh) = sizes[pl.page];
+                        let [x0, y0, x1, y1] = pl.clip;
+                        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| {
+                            let (sx, sy) = pl.matrix.apply(x, y);
+                            to_screen(sx, sy)
+                        });
+                        // UVs of the visible part (texture y runs down from the page top).
+                        let uv = |x: f64, y: f64| pos2((x / dw) as f32, (1.0 - y / dh) as f32);
+                        let uvs = [uv(x0, y0), uv(x1, y0), uv(x1, y1), uv(x0, y1)];
+                        match thumb(pl.page) {
+                            Some(tex) => {
+                                let mut mesh = egui::Mesh::with_texture(tex);
+                                for (p, u) in corners.iter().zip(uvs) {
+                                    mesh.vertices.push(egui::epaint::Vertex {
+                                        pos: *p,
+                                        uv: u,
+                                        color: if d.grayscale { Color32::from_gray(235) } else { Color32::WHITE },
+                                    });
+                                }
+                                mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                                painter.add(egui::Shape::mesh(mesh));
+                            }
+                            None => {
+                                painter.add(egui::Shape::convex_polygon(
+                                    corners.to_vec(),
+                                    Color32::from_gray(245),
+                                    Stroke::new(0.5, Color32::from_gray(180)),
+                                ));
+                                let c = corners.iter().fold(vec2(0.0, 0.0), |a, p| a + p.to_vec2()) / 4.0;
+                                painter.text(
+                                    c.to_pos2(),
+                                    egui::Align2::CENTER_CENTER,
+                                    (pl.page + 1).to_string(),
+                                    theme::regular(11.0),
+                                    Color32::from_gray(120),
+                                );
+                            }
+                        }
+                    }
+                    for b in &sheet.borders {
+                        painter.rect_stroke(
+                            Rect::from_two_pos(to_screen(b[0], b[1]), to_screen(b[2], b[3])),
+                            0.0,
+                            Stroke::new(0.6, Color32::BLACK),
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                    for l in &sheet.lines {
+                        painter.line_segment([to_screen(l[0], l[1]), to_screen(l[2], l[3])], Stroke::new(0.6, Color32::BLACK));
+                    }
+                }
+                _ => {}
+            }
+            ui.horizontal(|ui| {
+                let n = sheets.len();
+                if ui.add_enabled(d.sheet > 0, egui::Button::new("‹")).on_hover_text(tl!("Previous sheet")).clicked() {
+                    d.sheet -= 1;
+                }
+                ui.label(if n == 0 {
+                    tl!("No sheets").to_string()
+                } else {
+                    crate::i18n::fmt(tl!("Sheet {s} of {n}"), &[("s", &(d.sheet + 1).to_string()), ("n", &n.to_string())])
+                });
+                if ui.add_enabled(d.sheet + 1 < n, egui::Button::new("›")).on_hover_text(tl!("Next sheet")).clicked() {
+                    d.sheet += 1;
+                }
+            });
+            if let Ok(settings) = &settings {
+                ui.label(crate::i18n::fmt(tl!("{pages} document pages → {sides} printed sides"), &[("pages", &settings.pages.len().to_string()), ("sides", &sheets.len().to_string())]));
+                if d.handling == Handling::Multiple {
+                    ui.label(egui::RichText::new(tl!("Pages are already arranged on each side. Keep any additional printer layout at one page per sheet.")).small().color(t.text_muted));
+                }
+            }
+            if let Some(s) = sheets.get(d.sheet) {
+                ui.label(egui::RichText::new(d.units.size(s.size.0, s.size.1)).small().color(t.text_muted));
+                if d.handling == Handling::Size
+                    && let Some(p) = s.placed.first()
+                {
+                    let scale = p.matrix.0[0].hypot(p.matrix.0[1]) * 100.0;
+                    ui.label(crate::i18n::fmt(tl!("PDF scale: {scale}%"), &[("scale", &format!("{scale:.2}"))]));
+                    ui.label(egui::RichText::new(tl!("Printer paper and scaling may differ. Check driver settings.")).small().color(t.text_muted));
+                    if (scale - 100.0).abs() > 0.01 {
+                        ui.label(egui::RichText::new(tl!("Drawing scale changes. Use Actual size for full-scale plans.")).small().color(t.text_muted));
+                    }
+                }
+            }
+        });
+        ui.add_space(16.0);
+        // Settings scroll independently so Print and Cancel stay reachable on a laptop.
+        ui.vertical(|ui| {
+        ui.set_width(470.0);
+        egui::ScrollArea::vertical().id_salt("print-settings").max_height(560.0).auto_shrink([false, false]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(tl!("Presets:"));
+                let mut chosen = None;
+                let current = d.layout_preferences();
+                let selected = d.presets.iter().find(|(_, value)| **value == current).map_or(tl!("Custom"), |(name, _)| name.as_str());
+                egui::ComboBox::from_id_salt("print-preset").selected_text(selected).width(170.0).show_ui(ui, |ui| {
+                    for name in d.presets.keys() {
+                        if ui.selectable_label(false, name).clicked() { chosen = Some(name.clone()); }
+                    }
+                    if d.presets.is_empty() { ui.label(tl!("No saved presets")); }
+                });
+                if let Some(name) = chosen { d.preset_error = d.apply_preset(&name).err(); }
+            });
+            egui::CollapsingHeader::new(tl!("Save current settings as a preset")).id_salt("save-print-preset").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(widgets::line(&mut d.preset_name).hint_text(tl!("Preset name")).desired_width(170.0));
+                    if ui.button(tl!("Save preset")).clicked() {
+                        let name = d.preset_name.clone();
+                        d.preset_error = d.save_preset(&name).err();
+                    }
+                });
+                ui.label(egui::RichText::new(tl!("Uses paper, layout, colour and two-sided settings. Page ranges and copies stay with this job.")).small().color(t.text_muted));
+            });
+            if let Some(error) = &d.preset_error { ui.label(egui::RichText::new(error).color(t.text_muted)); }
+            ui.add_space(8.0);
+            egui::Grid::new("print-top").min_col_width(70.0).num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
                 ui.label(tl!("Printer:"));
                 let before = d.printer.clone();
                 // The browser's print dialog sets copies, two-sided printing and colour itself.
@@ -1069,6 +1337,30 @@ pub(crate) fn body(
                     driver_options_panel(ui, d, t);
                 }
             }
+            widgets::section_title(ui, tl!("Layout"));
+            ui.horizontal(|ui| {
+                ui.label(tl!("Pages per sheet:"));
+                let mut count = if d.handling == Handling::Multiple { d.per_sheet } else { 1 };
+                let before = count;
+                combo(ui, "primary-per-sheet", &mut count, &[(1, "1"), (2, "2"), (4, "4"), (6, "6"), (9, "9"), (16, "16")], 70.0);
+                if count != before {
+                    d.set_pages_per_sheet(count);
+                }
+                if ui.button(tl!("Two pages side by side")).clicked() {
+                    d.set_pages_per_sheet(2);
+                    d.orientation = Orientation::Landscape;
+                    d.order = PageOrder::Horizontal;
+                }
+            });
+            ui.label(egui::RichText::new(tl!("Pages per sheet arranges different pages. Copies repeats the whole print job.")).small().color(t.text_muted));
+            ui.horizontal(|ui| {
+                ui.label(tl!("Orientation:"));
+                widgets::radio_value(ui, &mut d.orientation, Orientation::Auto, tl!("Auto portrait/landscape"));
+                widgets::radio_value(ui, &mut d.orientation, Orientation::Portrait, tl!("Portrait"));
+                widgets::radio_value(ui, &mut d.orientation, Orientation::Landscape, tl!("Landscape"));
+            });
+
+            ui.add_space(6.0);
             if let Some(&source) = sizes.get(d.current_page) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
@@ -1166,8 +1458,6 @@ pub(crate) fn body(
                 }
                 Handling::Multiple => {
                     ui.horizontal(|ui| {
-                        ui.label(tl!("Pages per sheet:"));
-                        combo(ui, "per-sheet", &mut d.per_sheet, &[(2, "2"), (4, "4"), (6, "6"), (9, "9"), (16, "16")], 60.0);
                         ui.label(tl!("Page order:"));
                         combo(
                             ui,
@@ -1213,12 +1503,6 @@ pub(crate) fn body(
                 }
             }
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(tl!("Orientation:"));
-                widgets::radio_value(ui, &mut d.orientation, Orientation::Auto, tl!("Auto portrait/landscape"));
-                widgets::radio_value(ui, &mut d.orientation, Orientation::Portrait, tl!("Portrait"));
-                widgets::radio_value(ui, &mut d.orientation, Orientation::Landscape, tl!("Landscape"));
-            });
             ui.add_space(6.0);
             widgets::section_title(ui, tl!("Comments & Forms"));
             combo(
@@ -1257,104 +1541,6 @@ pub(crate) fn body(
                     );
                 });
         });
-        ui.add_space(12.0);
-        // Preview.
-        ui.vertical(|ui| {
-            ui.set_width(PREVIEW_W);
-            let (area, _) = ui.allocate_exact_size(vec2(PREVIEW_W, PREVIEW_H), egui::Sense::hover());
-            ui.painter().rect_filled(area, 6.0, t.hover);
-            match (&settings, sheets.get(d.sheet)) {
-                (Err(e), _) => {
-                    ui.put(area.shrink(16.0), egui::Label::new(egui::RichText::new(tl!(e)).color(t.text_muted)).wrap());
-                }
-                (Ok(_), Some(sheet)) => {
-                    let k = (PREVIEW_BOX.0 / sheet.size.0 as f32).min(PREVIEW_BOX.1 / sheet.size.1 as f32);
-                    let paper = Rect::from_center_size(area.center(), vec2(sheet.size.0 as f32 * k, sheet.size.1 as f32 * k));
-                    ui.painter().rect_filled(paper, 0.0, Color32::WHITE);
-                    ui.painter().rect_stroke(paper, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
-                    let to_screen = |x: f64, y: f64| -> Pos2 { pos2(paper.left() + x as f32 * k, paper.bottom() - y as f32 * k) };
-                    let painter = ui.painter().with_clip_rect(paper);
-                    for pl in &sheet.placed {
-                        let (dw, dh) = sizes[pl.page];
-                        let [x0, y0, x1, y1] = pl.clip;
-                        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| {
-                            let (sx, sy) = pl.matrix.apply(x, y);
-                            to_screen(sx, sy)
-                        });
-                        // UVs of the visible part (texture y runs down from the page top).
-                        let uv = |x: f64, y: f64| pos2((x / dw) as f32, (1.0 - y / dh) as f32);
-                        let uvs = [uv(x0, y0), uv(x1, y0), uv(x1, y1), uv(x0, y1)];
-                        match thumb(pl.page) {
-                            Some(tex) => {
-                                let mut mesh = egui::Mesh::with_texture(tex);
-                                for (p, u) in corners.iter().zip(uvs) {
-                                    mesh.vertices.push(egui::epaint::Vertex {
-                                        pos: *p,
-                                        uv: u,
-                                        color: if d.grayscale { Color32::from_gray(235) } else { Color32::WHITE },
-                                    });
-                                }
-                                mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-                                painter.add(egui::Shape::mesh(mesh));
-                            }
-                            None => {
-                                painter.add(egui::Shape::convex_polygon(
-                                    corners.to_vec(),
-                                    Color32::from_gray(245),
-                                    Stroke::new(0.5, Color32::from_gray(180)),
-                                ));
-                                let c = corners.iter().fold(vec2(0.0, 0.0), |a, p| a + p.to_vec2()) / 4.0;
-                                painter.text(
-                                    c.to_pos2(),
-                                    egui::Align2::CENTER_CENTER,
-                                    (pl.page + 1).to_string(),
-                                    theme::regular(11.0),
-                                    Color32::from_gray(120),
-                                );
-                            }
-                        }
-                    }
-                    for b in &sheet.borders {
-                        painter.rect_stroke(
-                            Rect::from_two_pos(to_screen(b[0], b[1]), to_screen(b[2], b[3])),
-                            0.0,
-                            Stroke::new(0.6, Color32::BLACK),
-                            egui::StrokeKind::Middle,
-                        );
-                    }
-                    for l in &sheet.lines {
-                        painter.line_segment([to_screen(l[0], l[1]), to_screen(l[2], l[3])], Stroke::new(0.6, Color32::BLACK));
-                    }
-                }
-                _ => {}
-            }
-            ui.horizontal(|ui| {
-                let n = sheets.len();
-                if ui.add_enabled(d.sheet > 0, egui::Button::new("‹")).on_hover_text(tl!("Previous sheet")).clicked() {
-                    d.sheet -= 1;
-                }
-                ui.label(if n == 0 {
-                    tl!("No sheets").to_string()
-                } else {
-                    crate::i18n::fmt(tl!("Sheet {s} of {n}"), &[("s", &(d.sheet + 1).to_string()), ("n", &n.to_string())])
-                });
-                if ui.add_enabled(d.sheet + 1 < n, egui::Button::new("›")).on_hover_text(tl!("Next sheet")).clicked() {
-                    d.sheet += 1;
-                }
-            });
-            if let Some(s) = sheets.get(d.sheet) {
-                ui.label(egui::RichText::new(d.units.size(s.size.0, s.size.1)).small().color(t.text_muted));
-                if d.handling == Handling::Size
-                    && let Some(p) = s.placed.first()
-                {
-                    let scale = p.matrix.0[0].hypot(p.matrix.0[1]) * 100.0;
-                    ui.label(crate::i18n::fmt(tl!("PDF scale: {scale}%"), &[("scale", &format!("{scale:.2}"))]));
-                    ui.label(egui::RichText::new(tl!("Printer paper and scaling may differ. Check driver settings.")).small().color(t.text_muted));
-                    if (scale - 100.0).abs() > 0.01 {
-                        ui.label(egui::RichText::new(tl!("Drawing scale changes. Use Actual size for full-scale plans.")).small().color(t.text_muted));
-                    }
-                }
-            }
         });
     });
     ui.add_space(12.0);
@@ -1368,6 +1554,13 @@ pub(crate) fn body(
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             cancel = true;
         }
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            if ui.add_enabled(settings.is_ok() && !sheets.is_empty(), egui::Button::new(tl!("Save as PDF…"))).clicked() {
+                d.printer = None;
+                d.printer_picked = true;
+                go = true;
+            }
+        });
     });
     (go, cancel)
 }

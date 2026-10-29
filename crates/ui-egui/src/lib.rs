@@ -2086,9 +2086,9 @@ impl PdfCraftApp {
             Err(e) => {
                 use pdfcraft_engine::links::BlockedLink;
                 let template = if matches!(e, BlockedLink::MailFile | BlockedLink::MailEncodedWord) {
-                    "{who} in this document tried to open an address PdfCraft won't open: {e}."
+                    "{who} in this document tried to open an address Ryan's PDF Viewer won't open: {e}."
                 } else {
-                    "{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents."
+                    "{who} in this document tried to open an address Ryan's PDF Viewer won't open: {e}. Only web (http, https) and email (mailto) links open from documents."
                 };
                 self.notify_fmt(template, &[("who", tl!(origin.noun())), ("e", &e.to_string())]);
             }
@@ -2433,6 +2433,8 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        v["print_layout"] = self.print_draft.layout_preferences();
+        v["print_presets"] = serde_json::json!(self.print_draft.presets);
         v.to_string()
     }
 
@@ -2507,6 +2509,8 @@ impl PdfCraftApp {
         {
             self.print_draft.paper = paper;
         }
+        self.print_draft.restore_layout_preferences(&v["print_layout"]);
+        self.print_draft.restore_presets(&v["print_presets"]);
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;
         }
@@ -2678,8 +2682,21 @@ impl PdfCraftApp {
             }
             ("left", _) => self.left_open = value != "closed",
             ("home", _) => self.active = None,
+            ("print-preset-save", _) => self.print_draft.save_preset(value)?,
+            ("print-preset", _) => self.print_draft.apply_preset(value)?,
+            ("print-pages-per-sheet", _) => {
+                let count = value.parse::<usize>().map_err(|_| "pages per sheet must be 1, 2, 4, 6, 9 or 16")?;
+                if !matches!(count, 1 | 2 | 4 | 6 | 9 | 16) {
+                    return Err("pages per sheet must be 1, 2, 4, 6, 9 or 16".into());
+                }
+                self.print_draft.set_pages_per_sheet(count);
+            }
             ("dialog", _) => {
                 self.dialog = match value {
+                    "print" => {
+                        self.open_print();
+                        self.dialog
+                    }
                     "properties" => Some(Dialog::Properties(PropsTab::Description)),
                     "security" => Some(Dialog::Properties(PropsTab::Security)),
                     "fonts" => Some(Dialog::Properties(PropsTab::Fonts)),
@@ -3330,7 +3347,7 @@ impl eframe::App for PdfCraftApp {
             .active
             .and_then(|i| crate::canvas::tab_label(self, i))
             .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
-            .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
+            .map_or_else(|| "Ryan's PDF Viewer".to_owned(), |name| format!("{name} — Ryan's PDF Viewer"));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.window_title = title;

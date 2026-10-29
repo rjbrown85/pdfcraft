@@ -7965,8 +7965,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print", "printers"]
-evidence = ["crates/ui-egui/tests/it/print.rs::paper_choice_survives_cancel_and_settings_restore", "crates/ui-egui/tests/it/print.rs::restored_paper_keeps_preview_and_saved_sheet_dimensions", "crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render", "crates/ui-egui/src/web_print.rs::a_job_draws_every_sheet_at_its_planned_resolution_then_builds_the_page", "crates/ui-egui/src/web_print.rs::the_print_page_turns_sideways_sheets_names_other_sizes_and_ends_without_a_blank_page"]
-notes = "⌘P; settings and live sheet preview; on the web the same dialog prints through the browser's print dialog; last paper selection, including cancelled Print dialogs, persists by canonical name; this change does not alter persistence of other print preferences"
+evidence = ["crates/ui-egui/tests/it/print.rs::paper_choice_survives_cancel_and_settings_restore", "crates/ui-egui/tests/it/print.rs::restored_paper_keeps_preview_and_saved_sheet_dimensions", "crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render", "crates/ui-egui/src/web_print.rs::a_job_draws_every_sheet_at_its_planned_resolution_then_builds_the_page", "crates/ui-egui/src/web_print.rs::the_print_page_turns_sideways_sheets_names_other_sizes_and_ends_without_a_blank_page", "crates/ui-egui/tests/it/print.rs::named_print_presets_round_trip_without_copies_or_page_ranges"]
+notes = "Ryan's PDF Viewer has a Preview-style left-hand preview, separate scrolling settings, a two-up shortcut and named presets. Paper, ordinary layout, scaling, color, duplex, collation and annotation preferences persist. Copies and page ranges stay with the job. Booklet, poster, label and cut-and-stack are not supported by named presets. This remains the application print window, not an AppKit print panel."
 
 [[feature]]
 id = "print.printer-selection"
@@ -8061,8 +8061,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/print/src/tests.rs::multiple_pages_per_sheet", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/print/src/tests.rs::cut_stack_keeps_piles_in_order_and_blanks_in_place", "crates/print/src/tests.rs::cutting_and_stacking_recovers_every_selected_page", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools", "crates/ui-egui/tests/it/print.rs::cut_stack_dialog_previews_saves_and_refuses_duplex"]
-notes = "2/4/6/9/16, four sequential orders, borders, auto-rotate; also single-sided cut-and-stack order with aligned gutter cut marks, blank padding and range/reverse support (an extension, not an Acrobat parity claim). Duplex cut-and-stack is refused."
+evidence = ["crates/print/src/tests.rs::multiple_pages_per_sheet", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/print/src/tests.rs::cut_stack_keeps_piles_in_order_and_blanks_in_place", "crates/print/src/tests.rs::cutting_and_stacking_recovers_every_selected_page", "crates/automation/tests/it/automation.rs::cut_stack_printing_through_tools", "crates/ui-egui/tests/it/print.rs::cut_stack_dialog_previews_saves_and_refuses_duplex", "crates/print/src/tests.rs::composed_sheets_override_cups_layout_defaults", "crates/ui-egui/tests/it/print.rs::two_pages_shortcut_saves_the_preview_in_order_and_remembers_layout"]
+notes = "2/4/6/9/16, four sequential orders, borders and auto-rotate. The two-pages-side-by-side shortcut chooses landscape and horizontal order. Five distinct source pages produce three correctly ordered output sides, including the empty last slot. Composed CUPS jobs override number-up defaults with 1 and exact jobs request print-scaling=none. Single-sided cut-and-stack remains supported, with duplex refused. Physical printer output is not certified by these tests."
 
 [[feature]]
 id = "print.booklet"
@@ -8181,8 +8181,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render"]
-notes = "Save as PDF from the dialog"
+evidence = ["crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render", "crates/ui-egui/tests/it/print.rs::two_pages_shortcut_saves_the_preview_in_order_and_remembers_layout"]
+notes = "The fixed Save as PDF button exports the composed sheets directly from the print dialog. Save as PDF also remains available in the printer menu. The vector output and final empty slot are checked after saving and reopening."
 
 [[feature]]
 id = "print.print-pages-from-thumbnails"

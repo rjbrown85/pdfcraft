@@ -27,19 +27,11 @@ fn discord_button_in_the_top_bar_opens_discord() {
 }
 
 #[test]
-fn home_screen_links() {
-    for (label, url) in [
-        ("Join our Discord", links::DISCORD),
-        ("PdfCraft web page", "https://getartcraft.com/apps/pdfcraft"),
-        ("PdfCraft on GitHub", "https://github.com/storytold/pdfcraft"),
-        ("ArtCraft website", "https://getartcraft.com"),
-    ] {
-        let mut h = harness(|_| {});
-        h.get_by_label("Join the ArtCraft community");
-        h.get_by_label(label).click();
-        h.run_steps(2);
-        assert_eq!(h.state().last_opened_url.as_deref(), Some(url), "{label}");
-    }
+fn home_screen_identifies_the_fork_without_upstream_trademarks() {
+    let h = harness(|_| {});
+    h.get_by_label_contains("Welcome to Ryan's PDF Viewer");
+    assert!(h.query_by_label("Join the ArtCraft community").is_none());
+    assert!(h.query_by_label("ArtCraft").is_none());
 }
 
 #[test]
@@ -50,7 +42,9 @@ fn about_dialog_shows_the_brand_and_links() {
         app.open_bytes("one.pdf", None, pdf.to_vec()).unwrap();
         app.dialog = Some(Dialog::About);
     });
-    assert!(h.query_all_by_label("ArtCraft").count() >= 2, "the mark and the wordmark (alt text)");
+    h.get_by_label("Ryan's PDF Viewer");
+    h.get_by_label_contains("Based on PdfCraft");
+    assert!(h.query_by_label("ArtCraft").is_none());
     h.get_by_label("Join our Discord").click();
     h.run_steps(2);
     assert_eq!(h.state().last_opened_url.as_deref(), Some(links::DISCORD));

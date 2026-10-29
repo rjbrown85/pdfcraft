@@ -1,5 +1,8 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Personal fork update, 2026-10-29:** Ryan's PDF Viewer adds a Preview-style print layout, a two-pages-side-by-side shortcut, named print presets and explicit CUPS single-sheet handling for composed output. Fresh GUI settings use A4. This does not change the upstream completion estimates or claim physical-printer certification. See `crates/print/README.md`.
+
+
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M14, #3558: rebase guarded macOS per-file association recovery onto current main; estimates unchanged)
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M12 #3673: Character encoding accepts Identity-H/V with Adobe CJK collections; estimates unchanged)
 

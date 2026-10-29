@@ -38,14 +38,14 @@ garbage-collected file (callers check the print permission).
 
 The GUI Print dialog remembers its last selected paper size across application sessions,
 including when Print is cancelled. The preference stores a canonical name such as `A4`;
-unrecognized saved values retain the current selection (US Letter on a fresh app).
-This change does not alter persistence of other print preferences.
+unrecognized saved values retain the current selection (A4 on a fresh Ryan's PDF Viewer app).
+The GUI also remembers ordinary pages-per-sheet, orientation, page order, borders, auto-rotation, scaling, color, collation, annotations and duplex. Named presets store these choices with the paper size. Page ranges and copies are not restored. Special booklet, poster, label and cut-and-stack operations are not supported by named presets.
 Headless `doc_print` defaults are unchanged.
 
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`. Windows renders sheets through
+CUPS jobs stream through stdin with `fit-to-page=false`, `print-scaling=none` for exact scaling, and `number-up=1`. PdfCraft has already arranged each PDF page as one printed side. These explicit settings override queue defaults and conflicting job options to prevent a second N-up or scaling pass. Both GUI and automation submission use the same adapter. Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files
@@ -85,3 +85,18 @@ a matching page. On Windows craft-print sends the sheets as vectors with a Print
 for the sheet's exact paper and no scaling (#599's approach), validated by the driver:
 a job is refused, not shrunk, when the driver lacks the paper or would change it. Verify
 the driver's paper settings and physical calibration before relying on drawing scale.
+
+## Ryan's PDF Viewer print window
+
+The sheet preview appears on the left, with independently scrolling settings on the right.
+Pages per sheet is always visible in the Layout section. “Two pages side by side” chooses
+2-up, landscape paper and horizontal page order in one action. It preserves the selected
+paper and page range. The preview reports document pages and printed sides separately.
+Printing on both sides is independent of pages per sheet.
+
+UI automation can set `print-pages-per-sheet` (1, 2, 4, 6, 9, 16) and open `dialog=print`.
+Named presets can be saved with `print-preset-save=<name>` and applied with `print-preset=<name>`.
+The existing `doc_print` tool still supplies the headless layout/export/print path.
+A native AppKit print panel is not part of this change. The app retains its shared CUPS
+transport, with printer-specific options under Properties. Physical printer validation
+is separate from the rendered-PDF and submission-argument regression tests.
