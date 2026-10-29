@@ -1,5 +1,7 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
+> **Personal fork, 2026-10-29:** Ryan's PDF Viewer now offers a left-hand print preview, named presets and a direct two-up shortcut. Composed CUPS jobs explicitly request `number-up=1` and, for exact output, `print-scaling=none`. Existing Preview/Acrobat parity scores are unchanged. This remains the app's print window, not an AppKit print panel. Physical output still requires a printer check.
+
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M12 #3673: Character encoding CJK mapping routes corrected; scores and estimates unchanged)
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (localization ≈59% → ≈68%; weighted readiness 49.25 → 49.7 ≈ 50%) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)

@@ -2,7 +2,7 @@
 //! stay in PdfCraft; these adapters retain the application's print-error surface.
 
 pub use craft_print::{
-    Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
+    Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lpstat_command, parse_lpoptions, parse_lpstat,
     parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
 };
 
@@ -143,14 +143,32 @@ pub(crate) fn printer_options_via_within(
     options
 }
 
+/// PdfCraft has already arranged each PDF page as a complete printed side. Override CUPS
+/// queue defaults as well as driver choices so that a second N-up pass cannot shrink or
+/// regroup those sides. Apply this at the shared boundary, including automation jobs.
+fn composed_job(job: &Job) -> Job {
+    let mut job = job.clone();
+    job.options.retain(|(key, _)| !matches!(key.as_str(), "number-up" | "print-scaling" | "fit-to-page"));
+    job.options.push(("number-up".into(), "1".into()));
+    if job.scaling == Scaling::Exact {
+        job.options.push(("print-scaling".into(), "none".into()));
+    }
+    job
+}
+
+/// Arguments for the same composed job that [`submit`] sends.
+pub fn lp_args(job: &Job) -> Vec<String> {
+    craft_print::lp_args(&composed_job(job))
+}
+
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    craft_print::submit(pdf, &composed_job(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
-    craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    craft_print::submit_with_progress(pdf, &composed_job(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {

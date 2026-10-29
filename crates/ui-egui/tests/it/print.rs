@@ -23,8 +23,26 @@ fn harness_with_settings(settings: Option<String>) -> Harness<'static, PdfCraftA
     h
 }
 
-#[test]
-fn current_print_page_saves_the_viewed_page_when_labels_restart() {
+// The settings column scrolls independently of the preview and fixed action buttons.
+fn click_label(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    h.get_by_label(label).scroll_to_me();
+    h.run_steps(8);
+    h.get_by_label(label).click();
+}
+
+fn click_value(h: &mut Harness<'static, PdfCraftApp>, value: &str) {
+    h.get_by_value(value).scroll_to_me();
+    h.run_steps(8);
+    h.get_by_value(value).click();
+}
+
+fn click_role(h: &mut Harness<'static, PdfCraftApp>, role: Role, label: &str) {
+    h.get_by_role_and_label(role, label).scroll_to_me();
+    h.run_steps(8);
+    h.get_by_role_and_label(role, label).click();
+}
+
+fn colored_pages() -> Vec<u8> {
     // Five distinct painted pages, labelled i, ii, iii, 1, 2.
     let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R /PageLabels << /Nums [0 << /S /r >> 3 << /S /D /St 1 >>] >> >>".to_owned(),
@@ -47,6 +65,12 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
         bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
     bytes.extend_from_slice(format!("trailer << /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+#[test]
+fn current_print_page_saves_the_viewed_page_when_labels_restart() {
+    let bytes = colored_pages();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -62,7 +86,7 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
         h.run_steps(3);
         assert!(h.state_mut().execute("print.dialog"));
         h.run_steps(3);
-        h.get_by_label("Current page").click();
+        click_label(&mut h, "Current page");
         h.run_steps(3);
         assert_eq!(h.state().print_draft.current_page, current);
         h.get_by_label("Sheet 1 of 1");
@@ -70,7 +94,7 @@ fn current_print_page_saves_the_viewed_page_when_labels_restart() {
         h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
         h.state_mut().print_draft.printer = None;
         h.run_steps(1);
-        h.get_by_label("Save as PDF").click();
+        click_label(&mut h, "Save as PDF");
         h.run_steps(3);
         assert_eq!(h.state().dialog, None);
         let saved = std::sync::Arc::new(std::fs::read(&out).unwrap());
@@ -94,7 +118,7 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     h.get_by_label("Pages to Print".to_uppercase().as_str());
     h.get_by_label("Sheet 1 of 1");
     // Two copies of the one page, as a 2-up poster-free layout: Multiple.
-    h.get_by_label("Multiple").click();
+    click_label(&mut h, "Multiple");
     h.run_steps(2);
     h.get_by_label("Sheet 1 of 1");
     // No printer on a test machine: Save as PDF.
@@ -102,7 +126,7 @@ fn print_dialog_lays_out_sheets_and_saves_a_pdf() {
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().print_draft.printer = None;
     h.run_steps(1);
-    h.get_by_label("Save as PDF").click();
+    click_label(&mut h, "Save as PDF");
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
     let bytes = std::fs::read(&out).expect("saved");
@@ -139,7 +163,7 @@ fn print_dialog_prints_the_selected_pages() {
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().print_draft.printer = None;
     h.run_steps(1);
-    h.get_by_label("Save as PDF").click();
+    click_label(&mut h, "Save as PDF");
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
     let saved = std::fs::read(&out).expect("saved");
@@ -174,19 +198,19 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     h.state_mut().open_bytes("numbered.pdf", None, bytes.as_ref().clone()).unwrap();
     h.state_mut().execute("print.dialog");
     h.run_steps(3);
-    h.get_by_label("Multiple").click();
+    click_label(&mut h, "Multiple");
     h.run_steps(2);
     // Pick the new order through the actual widgets.
-    h.get_by_value("Horizontal").click();
+    click_value(&mut h, "Horizontal");
     h.run_steps(2);
-    h.get_by_label("Cut and stack").click();
+    click_label(&mut h, "Cut and stack");
     h.run_steps(2);
     assert_eq!(h.state().print_draft.order, PageOrder::CutStack);
     h.state_mut().print_draft.per_sheet = 4;
     h.run_steps(2);
     h.get_by_label("Sheet 1 of 3");
     h.get_by_label_contains("Keep the sheets in order");
-    h.get_by_label("›").click();
+    click_label(&mut h, "›");
     h.run_steps(2);
     h.get_by_label("Sheet 2 of 3");
     h.state_mut().print_draft.duplex = Some(Duplex::LongEdge);
@@ -198,7 +222,7 @@ fn cut_stack_dialog_previews_saves_and_refuses_duplex() {
     let out = std::env::temp_dir().join(format!("pdfcraft-cut-stack-ui-{}.pdf", std::process::id()));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.run_steps(2);
-    h.get_by_label("Save as PDF").click();
+    click_label(&mut h, "Save as PDF");
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
     let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
@@ -216,7 +240,7 @@ fn a_failed_save_as_pdf_keeps_the_dialog_open() {
     let out = std::env::temp_dir().join(format!("pdfcraft-missing-{}", std::process::id())).join("x.pdf");
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.run_steps(2);
-    h.get_by_label("Save as PDF").click();
+    click_label(&mut h, "Save as PDF");
     h.run_steps(3);
     assert_eq!(h.state().dialog, Some(Dialog::Print), "the dialog stays open, with its settings");
     let toast = h.state().toast.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
@@ -252,9 +276,9 @@ fn print_dialog_shows_the_printer_driver_options() {
     h.get_by_label("Media");
     h.get_by_label("Paper tray");
     // The selected sheet's media is always sent, independently of changed driver properties.
-    let media = vec![("media".to_string(), "Letter".to_string())];
+    let media = vec![("media".to_string(), "A4".to_string())];
     assert_eq!(h.state().print_draft.job("form.pdf").options, [("InputSlot".to_string(), "Tray2".to_string()), media[0].clone()]);
-    h.get_by_label("Reset to printer defaults").click();
+    click_label(&mut h, "Reset to printer defaults");
     h.run_steps(2);
     assert_eq!(h.state().print_draft.job("form.pdf").options, media, "driver defaults are not sent; selected paper is retained");
     // Options read for another printer never go with this one's job.
@@ -388,7 +412,7 @@ fn architectural_page_can_be_matched_at_100_percent() {
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
     h.get_by_label("PDF page: 36.00 × 24.00 in");
-    h.get_by_label("Match page at 100%").click();
+    click_label(&mut h, "Match page at 100%");
     h.run_steps(3);
     h.get_by_value("ARCH D (24 x 36 in)");
     h.get_by_label("PDF scale: 100.00%");
@@ -408,7 +432,7 @@ fn custom_page_cannot_silently_match_a_standard_paper() {
     assert!(pdfcraft_engine::print::matching_paper((300.0, 400.0)).is_none());
     let before = h.state().print_draft.clone();
     assert!(h.get_by_label("Match page at 100%").accesskit_node().is_disabled());
-    h.get_by_label("Match page at 100%").click();
+    click_label(&mut h, "Match page at 100%");
     h.run_steps(3);
     assert_eq!(h.state().print_draft.paper, before.paper);
     assert_eq!(h.state().print_draft.size, before.size);
@@ -447,16 +471,16 @@ fn print_as_image_is_an_advanced_choice_that_saves_pictures() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
-    h.get_by_label("Advanced".to_uppercase().as_str()).click();
+    click_label(&mut h, "Advanced".to_uppercase().as_str());
     h.run_steps(2);
-    h.get_by_label("Print as image").click();
+    click_label(&mut h, "Print as image");
     h.run_steps(2);
     assert!(h.state().print_draft.as_image);
     let out = std::env::temp_dir().join(format!("pdfcraft-print-image-test-{}.pdf", std::process::id()));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.state_mut().print_draft.printer = None;
     h.run_steps(1);
-    h.get_by_label("Save as PDF").click();
+    click_label(&mut h, "Save as PDF");
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
     let bytes = std::fs::read(&out).expect("saved");
@@ -505,11 +529,11 @@ fn leaving_label_gives_back_the_paper_it_replaced() {
         h.state_mut().print_draft.paper = a4;
         h.state_mut().print_draft.handling = PrintHandling::Size;
         h.run_steps(2);
-        h.get_by_role_and_label(Role::Button, "Label").click();
+        click_role(&mut h, Role::Button, "Label");
         h.run_steps(2);
         assert_eq!(h.state().print_draft.handling, PrintHandling::Label);
         assert_eq!(h.state().print_draft.paper, LABEL_PAPER, "Label puts label stock in");
-        h.get_by_role_and_label(Role::Button, tab).click();
+        click_role(&mut h, Role::Button, tab);
         h.run_steps(2);
         assert_eq!(h.state().print_draft.handling, mode);
         assert_eq!(h.state().print_draft.paper, a4, "{tab} gives A4 back after Label");
@@ -552,17 +576,17 @@ fn label_stock_picked_from_the_paper_menu_is_undone_by_leaving_label() {
     h.run_steps(3);
     h.state_mut().print_draft.paper = a4;
     h.run_steps(2);
-    h.get_by_value("A4").click();
+    click_value(&mut h, "A4");
     h.run_steps(2);
     // The label stock is last in a menu that scrolls: bring it into view (it settles over a few
     // frames) before clicking it.
     h.get_by_label(PAPERS[LABEL_PAPER].0).scroll_to_me();
     h.run_steps(4);
-    h.get_by_label(PAPERS[LABEL_PAPER].0).click();
+    click_label(&mut h, PAPERS[LABEL_PAPER].0);
     h.run_steps(2);
     assert_eq!(h.state().print_draft.paper, LABEL_PAPER);
     assert_eq!(h.state().print_draft.handling, PrintHandling::Label);
-    h.get_by_role_and_label(Role::Button, "Size").click();
+    click_role(&mut h, Role::Button, "Size");
     h.run_steps(2);
     assert_eq!(h.state().print_draft.handling, PrintHandling::Size);
     assert_eq!(h.state().print_draft.paper, a4);
@@ -580,17 +604,17 @@ fn a_paper_picked_from_the_menu_while_in_label_is_kept() {
     h.run_steps(3);
     h.state_mut().print_draft.paper = a4;
     h.run_steps(2);
-    h.get_by_role_and_label(Role::Button, "Label").click();
+    click_role(&mut h, Role::Button, "Label");
     h.run_steps(2);
     assert_eq!(h.state().print_draft.paper, LABEL_PAPER);
-    h.get_by_value(PAPERS[LABEL_PAPER].0).click();
+    click_value(&mut h, PAPERS[LABEL_PAPER].0);
     h.run_steps(2);
     h.get_by_label("US Letter").scroll_to_me();
     h.run_steps(4);
-    h.get_by_label("US Letter").click();
+    click_label(&mut h, "US Letter");
     h.run_steps(2);
     assert_eq!(h.state().print_draft.paper, letter);
-    h.get_by_role_and_label(Role::Button, "Size").click();
+    click_role(&mut h, Role::Button, "Size");
     h.run_steps(2);
     assert_eq!(h.state().print_draft.handling, PrintHandling::Size);
     assert_eq!(h.state().print_draft.paper, letter, "the paper picked in Label is kept");
@@ -759,12 +783,14 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     let mut h = harness();
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
-    h.get_by_value("US Letter").click();
+    h.state_mut().print_draft.paper = letter;
     h.run_steps(2);
-    h.get_by_label("A4").click();
+    click_value(&mut h, "US Letter");
+    h.run_steps(2);
+    click_label(&mut h, "A4");
     h.run_steps(2);
     assert_eq!(h.state().print_draft.paper, a4);
-    // Only paper should be added to persistence; these choices still belong to this session.
+    // Layout is remembered; copies and page ranges remain specific to this job.
     let draft = &mut h.state_mut().print_draft;
     draft.copies = 5;
     draft.which = pdfcraft_ui_egui::PrintWhich::Range;
@@ -772,7 +798,7 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     draft.orientation = Orientation::Landscape;
     draft.grayscale = true;
     let before_cancel = draft.clone();
-    h.get_by_label("Cancel").click();
+    click_label(&mut h, "Cancel");
     h.run_steps(2);
     assert_eq!(h.state().dialog, None);
     assert_eq!(h.state().print_draft, before_cancel, "cancel keeps the existing draft behavior");
@@ -781,8 +807,9 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     assert_eq!(json["print_paper"], "A4", "store the canonical name, not its position");
     let mut app = PdfCraftApp::new();
     app.restore(&saved);
-    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
-    assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
+    let expected =
+        pdfcraft_ui_egui::PrintDraft { paper: a4, per_sheet: 1, orientation: Orientation::Landscape, grayscale: true, ..Default::default() };
+    assert_eq!(app.print_draft, expected, "layout persists without copies or page ranges");
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));
     restarted.run_steps(3);
@@ -863,7 +890,7 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     h.state_mut().print_draft.printer = None;
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     h.run_steps(1);
-    h.get_by_label("Save as PDF").click();
+    click_label(&mut h, "Save as PDF");
     h.run_steps(3);
     assert_eq!(h.state().dialog, None);
     let printed = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(&out).unwrap())).unwrap();
@@ -872,4 +899,84 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     let size = pages[0].display_size(&printed);
     assert!((size.0 - a4.0).abs() < 0.01 && (size.1 - a4.1).abs() < 0.01, "saved sheet: {size:?}");
     std::fs::remove_file(out).unwrap();
+}
+
+#[test]
+fn two_pages_shortcut_saves_the_preview_in_order_and_remembers_layout() {
+    use pdfcraft_engine::print::{Orientation, PageOrder};
+    let mut h = harness();
+    h.state_mut().open_bytes("five-colors.pdf", None, colored_pages()).unwrap();
+    h.run_steps(3);
+    h.state_mut().execute("print.dialog");
+    h.state_mut().print_draft.orientation = Orientation::Portrait;
+    h.state_mut().print_draft.order = PageOrder::VerticalReversed;
+    h.run_steps(3);
+    click_label(&mut h, "Two pages side by side");
+    h.run_steps(3);
+    h.get_by_label("Sheet 1 of 3");
+    h.get_by_label("5 document pages → 3 printed sides");
+    assert_eq!(h.state().print_draft.orientation, Orientation::Landscape);
+    assert_eq!(h.state().print_draft.per_sheet, 2);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.print_draft.per_sheet, 2);
+    assert_eq!(restored.print_draft.handling, pdfcraft_ui_egui::PrintHandling::Multiple);
+    assert_eq!(restored.print_draft.orientation, Orientation::Landscape);
+    assert_eq!(restored.print_draft.order, PageOrder::Horizontal);
+    let out = std::env::temp_dir().join(format!("ryan-two-up-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = Some("Test_Queue".into());
+    h.run_steps(2);
+    click_label(&mut h, "Save as PDF…");
+    h.run_steps(3);
+    let saved = std::sync::Arc::new(std::fs::read(&out).unwrap());
+    std::fs::remove_file(out).unwrap();
+    let doc = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 3);
+    let mut renderer = pdfcraft_render::PageRenderer::new(saved, Default::default());
+    let colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [255, 255, 255]];
+    for page in 0..3 {
+        let shot = renderer.render(pdfcraft_render::RenderRequest { page, scale: 0.5, ..Default::default() });
+        assert!(shot.error.is_none(), "{:?}", shot.error);
+        assert!(shot.width > shot.height);
+        for cell in 0..2 {
+            let x = shot.width * (1 + cell * 2) / 4;
+            let offset = ((shot.height / 2 * shot.width + x) * 4) as usize;
+            assert_eq!(&shot.rgba[offset..offset + 3], &colors[page * 2 + cell as usize], "sheet {page}, cell {cell}");
+        }
+    }
+}
+
+#[test]
+fn corrupt_print_preferences_do_not_change_layout_or_job_selection() {
+    let mut app = PdfCraftApp::new();
+    app.restore(r#"{"print_layout":{"per_sheet":18446744073709551615,"orientation":"sideways","border":"yes"}}"#);
+    assert_eq!(app.print_draft.handling, pdfcraft_ui_egui::PrintHandling::Size);
+    assert_eq!(app.print_draft.orientation, pdfcraft_engine::print::Orientation::Auto);
+    assert!(!app.print_draft.border);
+    assert_eq!(app.print_draft.which, pdfcraft_ui_egui::PrintWhich::All);
+}
+
+#[test]
+fn named_print_presets_round_trip_without_copies_or_page_ranges() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("print-pages-per-sheet", "2").unwrap();
+    app.print_draft.orientation = pdfcraft_engine::print::Orientation::Landscape;
+    app.print_draft.duplex = Some(pdfcraft_engine::print::spool::Duplex::ShortEdge);
+    app.print_draft.grayscale = true;
+    app.print_draft.copies = 4;
+    app.print_draft.range = "2-4".into();
+    app.set_option("print-preset-save", "Class handouts").unwrap();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&app.persist());
+    fresh.set_option("print-pages-per-sheet", "1").unwrap();
+    fresh.set_option("print-preset", "Class handouts").unwrap();
+    assert_eq!(fresh.print_draft.per_sheet, 2);
+    assert_eq!(fresh.print_draft.duplex, app.print_draft.duplex);
+    assert!(fresh.print_draft.grayscale);
+    assert_eq!(fresh.print_draft.copies, 1);
+    assert!(fresh.print_draft.range.is_empty());
+    assert!(fresh.set_option("print-preset", "Unknown").is_err());
+    assert!(fresh.set_option("print-preset-save", " ").is_err());
+    assert!(fresh.set_option("print-pages-per-sheet", "0").is_err());
 }

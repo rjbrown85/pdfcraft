@@ -3,6 +3,22 @@ use std::sync::Arc;
 use super::*;
 use crate::spool::{Duplex, Job, Printer, lp_args, parse_lpstat, parse_windows_printers};
 
+#[test]
+fn composed_sheets_override_cups_layout_defaults() {
+    let job = Job {
+        options: vec![("number-up".into(), "4".into()), ("print-scaling".into(), "fit".into()), ("InputSlot".into(), "Tray2".into())],
+        ..Job::default()
+    };
+    let args = lp_args(&job);
+    assert!(args.iter().any(|a| a == "number-up=1"), "{args:?}");
+    assert!(args.iter().any(|a| a == "print-scaling=none"), "{args:?}");
+    assert!(!args.iter().any(|a| a == "number-up=4" || a == "print-scaling=fit"));
+    assert!(args.iter().any(|a| a == "InputSlot=Tray2"));
+    let shrink = lp_args(&Job { scaling: spool::Scaling::ShrinkToFit, ..job });
+    assert!(shrink.iter().any(|a| a == "print-scaling=auto-fit"));
+    assert!(!shrink.iter().any(|a| a == "print-scaling=none"));
+}
+
 /// `n` pages of 200×300 (page 3 is landscape 300×200 when n ≥ 3); page i shows "(Page i+1)".
 /// Page 1 carries a printable square comment, a non-printing note, and a stamp.
 fn fixture(n: usize) -> Document {
@@ -300,7 +316,7 @@ fn spooler_arguments_and_printer_list() {
     };
     assert_eq!(
         lp_args(&job).join(" "),
-        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
+        "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false -o number-up=1 -o print-scaling=none"
     );
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
 }
@@ -502,7 +518,7 @@ fn printer_option_defaults_and_job_arguments() {
         ..Job::default()
     };
     let args = lp_args(&job).join(" ");
-    assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1"), "{args}");
+    assert!(args.ends_with("-o fit-to-page=false -o InputSlot=Tray2 -o EFMediaType=Heavy1 -o number-up=1 -o print-scaling=none"), "{args}");
     assert!(spool::printer_options("../../etc/passwd").is_empty(), "not a queue name");
 }
 
